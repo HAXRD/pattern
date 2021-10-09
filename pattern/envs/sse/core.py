@@ -90,12 +90,12 @@ class World(object):
     :param path_to_load_BMs: path to BMs mat file.
     :param seed: seed for random number generator.
     '''
-    def __init__(self, path_to_load_BMs):
+    def __init__(self, path_to_load_BMs, seed=0):
         # TODO: maybe remove this
         # # seed setting
-        # self.np_rng = np.random.RandomState(0)
-        # self.seed = seed if seed is not None else 0
-        # self.np_rng.seed(self.seed)
+        self.np_rng = np.random.RandomState(0)
+        self.seed = seed if seed is not None else 0
+        self.np_rng.seed(self.seed)
 
         # load site-specific info from terrain.mat
         world_len, mesh_len, N, grids = self._load_BMs(path_to_load_BMs)
@@ -136,7 +136,7 @@ class World(object):
     def gen_1_position(self, AVOID_COLLISION=True):
         while True:
             if self.dim_p == 2:
-                x, y = self.world_len * np.random.rand(self.dim_p)
+                x, y = self.world_len * self.np_rng.rand(self.dim_p)
                 if AVOID_COLLISION: # consider collision with BMs
                     x_idx, y_idx = np.clip(np.array([x, y]) // self.mesh_len, 0, self.M - 1).astype(np.int32)
                     if self.grids[x_idx, y_idx] == 0.:
