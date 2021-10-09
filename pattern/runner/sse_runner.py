@@ -1,0 +1,350 @@
+# Copyright (c) 2021, Xu Chen, FUNLab, Xiamen University
+# All rights reserved.
+
+import os
+import time
+import torch
+import math
+import numpy as np
+import contextlib
+import wandb
+from numpy.random import default_rng
+from copy import deepcopy
+from utils.loss import hybrid_mse
+
+@contextlib.contextmanager
+def temp_seed(seed):
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
+
+def generate_1_sequence(size, MAX):
+    rng = default_rng()
+    sequence = rng.choice(MAX, size=size, replace=False)
+    return sorted(sequence)
+
+def _t2n(x):
+    return x.detach().cpu().numpy()
+
+class SSERunner(object):
+    """Runner class to perform training, evaluation, and data collection for the SSEs."""
+    def __init__(self, config):
+
+        self.all_args  = config['all_args']
+        self.base_env  = config['base_env']
+        self.env       = config['env']
+        self.eval_env  = config['eval_env']
+        self.device    = config['device']
+
+        # TODO: parameters
+        # ...
+        self.world_len = self.all_args.world_len
+        self.granularity = self.all_args.granularity
+        self.K = int(self.world_len) // self.granularity
+        self.n_ABS = self.all_args.n_ABS
+        self.use_emulator_ckpt = self.all_args.use_emulator_ckpt
+        self.num_base_env_episodes = self.all_args.num_base_env_episodes
+        self.num_base_emulator_epochs = self.all_args.num_base_emulator_epochs
+        self.num_base_emulator_batch_size = self.all_args.num_base_emulator_batch_size
+        self.top_o_activations = self.all_args.top_o_activations
+        self.planning_batch_size = self.all_args.planning_batch_size
+        self.planning_top_k = self.all_args.planning_top_k
+        self.num_env_episodes = self.all_args.num_env_episodes
+        self.num_planning_random_warmup = self.all_args.num_planning_random_warmup
+        self.num_planning_random = self.all_args.num_planning_random
+        self.num_planning_with_policy = self.all_args.num_planning_with_policy
+        self.policy_distributional = self.all_args.policy_distributional
+        self.emulator_replay_per = self.all_args.emulator_replay_per
+        self.emulator_replay_size = self.all_args.emulator_replay_size
+        self.policy_replay_size = self.all_args.policy_replay_size
+        self.use_eval = self.all_args.use_eval
+        self.use_wandb = self.all_args.use_wandb
+
+        self.eval_episodes = self.all_args.eval_episodes
+
+        # TODO: interval
+        # ...
+        self.save_interval = self.all_args.save_interval
+        self.eval_interval = self.all_args.eval_interval
+        self.log_interval = self.all_args.log_interval
+
+        # TODO: dir
+        # ...
+        self.emulator_pt = self.all_args.emulator_pt
+
+        if self.use_wandb:
+            self.save_dir = str(wandb.run.dir)
+            self.run_dir = str(wandb.run.dir)
+
+        # TODO: env emulator φ
+        # ...
+        from algorithms.emulator import Emulator
+        self.emulator = Emulator(self.all_args, self.device)
+
+        # TODO: policy μ
+        # ...
+        if self.policy_distributional == True:
+            from algorithms.policy import DistributionalPolicy as Policy
+        else:
+            from algorithms.policy import NaivePolicy as Policy
+        self.policy = Policy(self.all_args, self.device)
+
+        # TODO: transitions for φ
+        # ...
+        if self.emulator_replay_per == True:
+            from utils.replay import EmulatorPrioritizedReplay as Replay
+        else:
+            from utils.replay import EmulatorNaiveReplay as Replay
+        self.emulator_buffer = Replay(self.K, self.emulator_replay_size)
+
+        # TODO: transitions for μ
+        # ...
+        from utils.replay import PolicyReplay
+        self.policy_buffer = PolicyReplay(self.K, self.policy_replay_size)
+
+    def run(self):
+        """"""
+        # get a base emulator φ
+        if not self.use_emulator_ckpt:
+            self.emulator_pretrain()
+        self.emulator_load()
+
+        start = time.time()
+        episodes = int(self.num_env_episodes)
+
+        for episode in range(episodes):
+            # reset env
+            GU_pattern = self.env.reset() # (K, K)
+            # plan with different strategies
+            if episode < self.num_planning_random_warmup: # randomly sample different ABS patterns
+                planning_size = self.num_planning_random
+                planning_ABS_patterns = self.random_sample_ABS_patterns(planning_size) # (planning_size, K, K)
+            else: # use policy μ to predict an ABS pattern, then sample near this patterns.
+                planning_size = self.num_planning_with_policy
+                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_patterns, planning_size)
+            GU_patterns = np.repeat(np.expand_dims(GU_patterns, 0), 0, planning_size)
+            assert planning_ABS_patterns.shape == (planning_size, self.K, self.K)
+            assert GU_patterns.shape == (planning_size, self.K, self.K)
+
+            # get indices of top k transitions
+            top_k_GU_patterns, top_k_ABS_patterns, top_k_pred_CGU_patterns = self.plan(GU_patterns, planning_ABS_patterns) # each has a shape of (top_k, K, K)
+            top_k_CGU_patterns = np.zeros_like(top_k_pred_CGU_patterns)
+            for _CGU_pattern, _ABS_pattern in zip(top_k_CGU_patterns, top_k_ABS_patterns):
+                _CGU_pattern = self.env.step(_ABS_pattern)
+
+            # store transition to replay μ
+            best_data = top_k_GU_patterns[0], top_k_ABS_patterns[0], top_k_pred_CGU_patterns[0], top_k_CGU_patterns[0]
+            self.policy_buffer.add(best_data)
+
+            # store transition to replay φ
+            for _GU_pattern, _ABS_pattern, _pred_CGU_pattern, _CGU_pattern in zip(top_k_GU_patterns, top_k_ABS_patterns, top_k_pred_CGU_patterns, top_k_CGU_patterns):
+                data = _GU_pattern, _ABS_pattern, _pred_CGU_pattern, _CGU_pattern
+                self.emulator_buffer.add(data)
+
+            # train the emulator and policy
+            emulator_loss, policy_loss = self.train()
+
+            # save model
+            if (episode % self.save_interval == 0 or episode == episodes - 1):
+                self.save()
+
+            # log information
+            if episode % self.log_interval == 0:
+                end = time.time()
+                print(f"\n {episode}/{episodes}, EPS {episode / (end - start)}")
+
+                self.log_train(emulator_loss, policy_loss, episode)
+
+            # eval
+            if episode % self.eval_interval == 0 and self.use_eval:
+                self.eval(episode)
+
+    def emulator_load(self):
+        assert os.path.exists(self.emulator_pt)
+        assert os.path.isfile(self.emulator_pt)
+        emulator_state_dict = torch.load(self.emulator_pt)
+        self.emulator.model.load_state_dict(emulator_state_dict)
+
+    def emulator_pretrain(self):
+        from utils.replay import EmulatorNaiveReplay
+        replay = EmulatorNaiveReplay(self.K, self.num_base_env_episodes)
+        episodes = int(self.num_base_env_episodes)
+
+        for _ in range(episodes):
+            GU_pattern = self.base_env.reset() # (K, K)
+            ABS_pattern = self.random_sample_ABS_patterns(1).reshape(self.K, self.K) # sample 1 pattern (K, K)
+            CGU_pattern = self.base_env.step(ABS_pattern) # (K, K)
+            replay.add(GU_pattern, ABS_pattern, CGU_pattern)
+
+        optimizer = torch.optim.Adam(self.emulator.model.parameters(), lr=0.001)
+        min_train_loss = math.inf
+        for epoch in range(self.num_base_emulator_epochs):
+            train_loss = 0.
+            replay.shuffle()
+            for data in replay.data_loader(self.num_base_emulator_batch_size):
+                batch_GU_pattern, batch_ABS_pattern, batch_CGU_pattern = data
+                batch_GU_pattern = batch_GU_pattern.to(self.device)
+                batch_ABS_pattern = batch_ABS_pattern.to(self.device)
+                batch_CGU_pattern = batch_CGU_pattern.to(self.device)
+                bz = batch_GU_pattern.size()[0]
+
+                optimizer.zero_grad()
+                batch_output_pattern = self.emulator.model(torch.stack(batch_GU_pattern, batch_ABS_pattern), dim=1).squeeze()
+
+                batch_CGU_pattern = batch_CGU_pattern.view(bz, -1)
+                batch_output_pattern = batch_output_pattern.view(bz, -1)
+                loss = hybrid_mse(batch_output_pattern, batch_CGU_pattern)
+
+                loss.backward()
+                optimizer.step()
+                train_loss += loss.item() * bz
+            train_loss = train_loss / replay.size
+            print(f'Epoch {epoch + 1} \t loss: {train_loss:.6f}')
+            if train_loss < min_train_loss:
+                torch.save(self.emulator.model.state_dict(), 'base_emulator.pt')
+        print(f'Pretrain base emulator done...')
+
+    def random_sample_ABS_patterns(self, planning_size):
+        """
+        :return: planning_ABS_patterns: shape==(planning_size, K, K)
+        """
+        # generate `planning_size` unique pattern-indices lists
+        planning_ABS_pattern_idcs = set()
+        while len(planning_ABS_pattern_idcs) < planning_size:
+            planning_ABS_pattern_idcs.add(tuple(generate_1_sequence(self.n_ABS, self.K * self.K)))
+        planning_ABS_pattern_idcs = np.array([list(item) for item in list(planning_ABS_pattern_idcs)]).astype(np.int32)
+        # convert indices into patterns
+        planning_ABS_patterns = np.zeros((planning_size, self.K * self.K), dtype=np.float32)
+        for idc, p in zip(planning_ABS_pattern_idcs, planning_ABS_patterns):
+            p[idc] = 1.
+
+        return planning_ABS_patterns
+
+    @torch.no_grad() # DEBUG
+    def policy_sample_ABS_patterns(self, GU_patterns, planning_size):
+        """
+        :param GU_patterns  : shape==(K, K)
+        :param planning_size: planning size
+        :return: planning_ABS_patterns: shape==(planning_size, K, K)
+        """
+        GU_patterns = torch.FloatTensor(GU_patterns).to(self.device).view(1, 1, self.K, self.K) # (1, 1, K, K)
+        pred_ABS_patterns = _t2n(self.policy.model(GU_patterns)) # (1, 1, K, K)
+        # use base pattern to generate variations
+        base_pred_ABS_patterns = pred_ABS_patterns.reshape(self.K * self.K) # (K * K)
+
+        planning_ABS_patterns = np.zeros((planning_size, self.K*self.K), dtype=np.float32)
+        if self.use_activation_oriented_policy_sample:
+            sorted_activation_idcs = np.argsort(-base_pred_ABS_patterns) # (K * K)
+            top_o_sorted_activation_idcs = np.repeat(sorted_activation_idcs[:self.top_o_activations].reshape(1, self.top_o_activations), planning_size, axis=0) # (planning_size, top_o)
+            # sample indices of planning_ABS_patterns indices
+            sampled_idcs = set()
+            while len(sampled_idcs) < planning_size:
+                sampled_idcs.add(tuple(generate_1_sequence(self.n_ABS, self.top_o_activations)))
+            sampled_idcs = np.array([list(item) for item in list(sampled_idcs)]).astype(np.int32) # (planning_size, n_ABS)
+
+            selected_idcs = np.zeros_like(sampled_idcs)
+            for store, idc, tar in zip(selected_idcs, sampled_idcs, top_o_sorted_activation_idcs):
+                store = tar[idc]
+            for pattern, idcs in zip(planning_ABS_patterns, selected_idcs):
+                pattern[idcs] = 1.
+        else:
+            raise NotImplementedError
+        return planning_ABS_patterns
+
+
+    @torch.no_grad()
+    def plan(self, GU_patterns, planning_ABS_patterns):
+        """
+        Use emulator to predict CGU_patterns for env, then select top k to
+        :param GU_patterns          : shape==(planning_size, K, K)
+        :param planning_ABS_patterns: shape==(planning_size, K, K)
+        :return: (
+            top_k_GU_patterns : shape==(planning_size, K, K)
+            top_k_ABS_patterns: shape==(planning_size, K, K)
+            top_k_pred_CGU_patterns: shape==(planning_size, K, K)
+        )
+        """
+        planning_size = GU_patterns.shape()[0]
+        
+        xs = np.stack(
+            (GU_patterns, planning_ABS_patterns), axis=1).to(self.device) # (planning_size, 2, K, K)
+        
+        # feed in the emulator to get predicted CGU_patterns
+        if planning_size < self.planning_batch_size: # predict directly
+            ys = _t2n(self.emulator.model(torch.FloatTensor(xs).to(self.device))).squeeze() # (planning_size, K, K)
+        else: # partition into chunks
+            batch_size = self.planning_batch_size
+            n_chunks = math.ceil(float(planning_size)/float(batch_size))
+            xs_chunks = [xs[i: i+batch_size] for i in range(0, len(xs), batch_size)]
+            ys_chunks = [] # predicted CGU_patterns in chunk
+            for item in xs_chunks:
+                out = _t2n(self.emulator.model(torch.FloatTensor(item).to(self.device))).squeeze() # (batch_size, K, K)
+                ys_chunks.append(out)
+            ys = np.concatenate(ys_chunks) # (planning_size, K, K)
+        pred_CGU_patterns = ys.reshape(planning_size, self.K, self.K)
+        pred_CRs = np.sum(pred_CGU_patterns.reshape(planning_ABS_patterns, -1), axis=-1) # (planning_ABS_patterns)
+        top_k_idcs = np.argsort(-pred_CRs, axis=-1)[:self.planning_top_k]
+
+        top_k_GU_patterns  = GU_patterns[top_k_idcs]
+        top_k_ABS_patterns = planning_ABS_patterns[top_k_idcs]
+        top_k_pred_CGU_patterns = pred_CGU_patterns[top_k_idcs]
+
+        return (
+            top_k_GU_patterns,
+            top_k_ABS_patterns,
+            top_k_pred_CGU_patterns
+        )
+
+    def train(self):
+        self.trainer.prep_training()
+        emulator_loss = self.emulator.train(self.emulator_buffer)
+        policy_loss = self.policy.train(self.policy_buffer)
+        return (
+            emulator_loss,
+            policy_loss
+        )
+
+    def save(self):
+        torch.save(self.emulator.model.state_dict(), 'emulator.pt')
+        torch.save(self.policy.model.state_dict(), 'policy.pt')
+
+    def log_train(self, emulator_loss, policy_loss, episode):
+        if self.use_wandb:
+            wandb.log({'emulator_loss': emulator_loss}, episode)
+            wandb.log({'policy_loss': policy_loss}, episode)
+        else:
+            raise NotImplementedError
+
+    @torch.no_grad()
+    def eval(self, curr_episode):
+        
+        with temp_seed(self.seed+100000):
+            best_CRs = []
+            for episode in range(self.eval_episodes):
+                # reset all env
+                GU_pattern = self.eval_env.reset() # (K, K)
+
+                # planning
+                planning_size = self.num_planning_with_policy
+                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_patterns, planning_size) # (planning_size, K, K)
+                GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), 0, planning_size) # (planning_size, K, K)
+                assert planning_ABS_patterns.shape == (planning_size, self.K, self.K)
+                assert GU_patterns.shape == (planning_size, self.K, self.K)
+
+                _, top_k_ABS_patterns, _ = self.plan(GU_patterns, planning_ABS_patterns)
+                top_k_CGU_patterns = np.zeros_like(top_k_ABS_patterns) # (planning_size, K, K)
+                for _CGU_pattern, _ABS_pattern in zip(top_k_CGU_patterns, top_k_ABS_patterns):
+                    _CGU_pattern = self.env.step(_ABS_pattern)
+
+                top_k_CRs = np.sum(top_k_CGU_patterns.reshape(planning_size, -1), axis=-1) # (planning_size)
+                sorted_idcs = np.argsort(-top_k_CRs)
+                top_CR = top_k_CRs[sorted_idcs][0]
+
+                best_CRs.append(top_CR)
+
+            if self.use_wandb:
+                wandb.log({'eval_CRs': best_CRs}, curr_episode)
+                wandb.log({'mean_eval_CRs': np.mean(best_CRs)}, curr_episode)
