@@ -17,7 +17,7 @@ class Emulator:
     """
     def __init__(self, args, device=torch.device("cpu")):
         self.lr = args.emulator_lr
-        self.K = int(args.world_len) // args.granularity
+        self.K = int(args.world_len // args.granularity)
         self.least_emulator_buffer_size = args.least_emulator_buffer_size
         self.num_train_emulator = args.num_train_emulator
         self.emulator_batch_size = args.emulator_batch_size

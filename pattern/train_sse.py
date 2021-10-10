@@ -11,12 +11,9 @@ import socket
 import setproctitle
 from pathlib import Path
 
-from pattern.config import get_config
-from pattern.envs.sse.SSE_env import SSEEnv
-from pattern.runner.sse_runner import SSERunner as Runner
-from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
-from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
-
+from config import get_config
+from envs.sse.SSE_env import SSEEnv
+from runner.sse_runner import SSERunner as Runner
 
 def make_base_env(all_args):
     seed = all_args.seed
@@ -34,6 +31,7 @@ def make_eval_env(all_args):
     seed = all_args.seed * 100 + 13
     env = SSEEnv(all_args, seed)
     env.seed(seed)
+    return env
 
 def parse_args(args, parser):
     parser.add_argument('--scenario_name', type=str,
@@ -60,7 +58,7 @@ def main(args):
         device = torch.device("cpu")
 
     # run dir
-    run_dir = Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "results") / all_args.env_name / all_args.scenario_name / all_args.experiment_name
+    run_dir = Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "/results") / all_args.env_name / f'{all_args.n_ABS}a_{all_args.n_GU}g'
     if not run_dir.exists():
         os.makedirs(str(run_dir))
 
@@ -76,7 +74,7 @@ def main(args):
                          job_type="training",
                          reinit=True)
     else:
-        raise NotImplementedError
+        pass
 
     setproctitle.setproctitle(str(all_args.env_name) + "-" + str(all_args.experiment_name) + "@" + str(all_args.user_name))
 
@@ -87,7 +85,7 @@ def main(args):
     random.seed(all_args.seed)
 
     # env init
-    if args.use_emulator_ckpt:
+    if all_args.use_emulator_pt:
         base_env = None
     else:
         base_env = make_base_env(all_args)
@@ -103,6 +101,8 @@ def main(args):
         "run_dir": run_dir
     }
 
+    # from pprint import pprint
+    # pprint(config)
     # run experiments
     runner = Runner(config)
     runner.run()
@@ -115,7 +115,7 @@ def main(args):
     if all_args.use_wandb:
         run.finish()
     else:
-        raise NotImplementedError
+        pass
 
 if __name__ == "__main__":
     main(sys.argv[1:])

@@ -14,10 +14,15 @@ class NaivePolicy:
     """
     def __init__(self, args, device=torch.device("cpu")):
         self.args = args
+        self.least_policy_buffer_size = args.least_policy_buffer_size
+        self.num_train_policy = args.num_train_policy
+        self.policy_batch_size = args.policy_batch_size
+        
+
         self.device = device
         self.model = EncoderDecoder(1, 1).to(device)
         self.optim = torch.optim.Adam(self.model.parameters(),
-                                      lr=self.args.lr)
+                                      lr=self.args.policy_lr)
 
     def train(self, buffer):
         train_loss = 0.
@@ -48,5 +53,5 @@ class NaivePolicy:
         return return_loss
 
 class DistributionalPolicy:
-    def __init__(self, args, device=torch.device("cpug")):
+    def __init__(self, args, device=torch.device("cpu")):
         raise NotImplementedError

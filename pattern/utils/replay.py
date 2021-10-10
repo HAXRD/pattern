@@ -10,14 +10,14 @@ class EmulatorNaiveReplay(object):
     ::
     """
     def __init__(self, K, max_size):
-        self.K = K
-        self.max_size = max_size
+        self.K = int(K)
+        self.max_size = int(max_size)
         self.size = 0
         self.ptr = 0
 
-        self.GU_patterns = np.zeros((max_size, 1, K, K), dtype=np.float32)
-        self.ABS_patterns = np.zeros((max_size, 1, K, K), dtype=np.float32)
-        self.CGU_patterns = np.zeros((max_size, 1, K, K), dtype=np.float32)
+        self.GU_patterns = np.zeros((self.max_size, 1, self.K, self.K), dtype=np.float32)
+        self.ABS_patterns = np.zeros((self.max_size, 1, self.K, self.K), dtype=np.float32)
+        self.CGU_patterns = np.zeros((self.max_size, 1, self.K, self.K), dtype=np.float32)
 
     def add(self, data):
         GU_pattern, ABS_pattern, _, CGU_pattern = data
@@ -63,13 +63,13 @@ class EmulatorPrioritizedReplay(object):
 
 class PolicyReplay(object):
     def __init__(self, K, max_size):
-        self.K = K
-        self.max_size = max_size
+        self.K = int(K)
+        self.max_size = int(max_size)
         self.size = 0
         self.ptr = 0
 
-        self.GU_patterns = np.zeros((max_size, 1, K, K), dtype=np.float32)
-        self.ABS_patterns = np.zeros((max_size, 1, K, K), dtype=np.float32)
+        self.GU_patterns = np.zeros((self.max_size, 1, self.K, self.K), dtype=np.float32)
+        self.ABS_patterns = np.zeros((self.max_size, 1, self.K, self.K), dtype=np.float32)
 
     def add(self, data):
         GU_patterns, ABS_patterns, _ , _ = data

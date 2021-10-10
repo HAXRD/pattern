@@ -41,15 +41,16 @@ class SSERunner(object):
 
         # TODO: parameters
         # ...
+        self.seed = self.all_args.seed
         self.world_len = self.all_args.world_len
         self.granularity = self.all_args.granularity
-        self.K = int(self.world_len) // self.granularity
+        self.K = int(self.world_len) // int(self.granularity)
         self.n_ABS = self.all_args.n_ABS
-        self.use_emulator_ckpt = self.all_args.use_emulator_ckpt
+        self.use_emulator_pt = self.all_args.use_emulator_pt
         self.num_base_env_episodes = self.all_args.num_base_env_episodes
         self.num_base_emulator_epochs = self.all_args.num_base_emulator_epochs
         self.num_base_emulator_batch_size = self.all_args.num_base_emulator_batch_size
-        self.top_o_activations = self.all_args.top_o_activations
+        self.top_o_activations = self.n_ABS + 10
         self.planning_batch_size = self.all_args.planning_batch_size
         self.planning_top_k = self.all_args.planning_top_k
         self.num_env_episodes = self.all_args.num_env_episodes
@@ -64,7 +65,7 @@ class SSERunner(object):
         self.use_wandb = self.all_args.use_wandb
 
         self.eval_episodes = self.all_args.eval_episodes
-
+        self.use_activation_oriented_policy_sample = self.all_args.use_activation_oriented_policy_sample
         # TODO: interval
         # ...
         self.save_interval = self.all_args.save_interval
@@ -108,7 +109,7 @@ class SSERunner(object):
     def run(self):
         """"""
         # get a base emulator φ
-        if not self.use_emulator_ckpt:
+        if not self.use_emulator_pt:
             self.emulator_pretrain()
         self.emulator_load()
 
@@ -124,10 +125,10 @@ class SSERunner(object):
                 planning_ABS_patterns = self.random_sample_ABS_patterns(planning_size) # (planning_size, K, K)
             else: # use policy μ to predict an ABS pattern, then sample near this patterns.
                 planning_size = self.num_planning_with_policy
-                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_patterns, planning_size)
-            GU_patterns = np.repeat(np.expand_dims(GU_patterns, 0), 0, planning_size)
-            assert planning_ABS_patterns.shape == (planning_size, self.K, self.K)
-            assert GU_patterns.shape == (planning_size, self.K, self.K)
+                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size)
+            GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), planning_size, axis=0)
+            assert planning_ABS_patterns.shape == (planning_size, self.K, self.K), f'{planning_ABS_patterns.shape}'
+            assert GU_patterns.shape == (planning_size, self.K, self.K), f'{GU_patterns.shape}'
 
             # get indices of top k transitions
             top_k_GU_patterns, top_k_ABS_patterns, top_k_pred_CGU_patterns = self.plan(GU_patterns, planning_ABS_patterns) # each has a shape of (top_k, K, K)
@@ -169,6 +170,7 @@ class SSERunner(object):
         self.emulator.model.load_state_dict(emulator_state_dict)
 
     def emulator_pretrain(self):
+        print('[emulator pretrain] starting...')
         from utils.replay import EmulatorNaiveReplay
         replay = EmulatorNaiveReplay(self.K, self.num_base_env_episodes)
         episodes = int(self.num_base_env_episodes)
@@ -177,7 +179,8 @@ class SSERunner(object):
             GU_pattern = self.base_env.reset() # (K, K)
             ABS_pattern = self.random_sample_ABS_patterns(1).reshape(self.K, self.K) # sample 1 pattern (K, K)
             CGU_pattern = self.base_env.step(ABS_pattern) # (K, K)
-            replay.add(GU_pattern, ABS_pattern, CGU_pattern)
+            data = GU_pattern, ABS_pattern, None, CGU_pattern
+            replay.add(data)
 
         optimizer = torch.optim.Adam(self.emulator.model.parameters(), lr=0.001)
         min_train_loss = math.inf
@@ -192,7 +195,7 @@ class SSERunner(object):
                 bz = batch_GU_pattern.size()[0]
 
                 optimizer.zero_grad()
-                batch_output_pattern = self.emulator.model(torch.stack(batch_GU_pattern, batch_ABS_pattern), dim=1).squeeze()
+                batch_output_pattern = self.emulator.model(torch.cat((batch_GU_pattern, batch_ABS_pattern), dim=1)).squeeze()
 
                 batch_CGU_pattern = batch_CGU_pattern.view(bz, -1)
                 batch_output_pattern = batch_output_pattern.view(bz, -1)
@@ -220,24 +223,24 @@ class SSERunner(object):
         planning_ABS_patterns = np.zeros((planning_size, self.K * self.K), dtype=np.float32)
         for idc, p in zip(planning_ABS_pattern_idcs, planning_ABS_patterns):
             p[idc] = 1.
-
+        planning_ABS_patterns = planning_ABS_patterns.reshape(planning_size, self.K, self.K)
         return planning_ABS_patterns
 
     @torch.no_grad() # DEBUG
-    def policy_sample_ABS_patterns(self, GU_patterns, planning_size):
+    def policy_sample_ABS_patterns(self, GU_pattern, planning_size):
         """
-        :param GU_patterns  : shape==(K, K)
+        :param GU_pattern  : shape==(K, K)
         :param planning_size: planning size
         :return: planning_ABS_patterns: shape==(planning_size, K, K)
         """
-        GU_patterns = torch.FloatTensor(GU_patterns).to(self.device).view(1, 1, self.K, self.K) # (1, 1, K, K)
-        pred_ABS_patterns = _t2n(self.policy.model(GU_patterns)) # (1, 1, K, K)
+        GU_pattern = torch.FloatTensor(GU_pattern).to(self.device).view(1, 1, self.K, self.K) # (1, 1, K, K)
+        pred_ABS_pattern = _t2n(self.policy.model(GU_pattern)) # (1, 1, K, K)
         # use base pattern to generate variations
-        base_pred_ABS_patterns = pred_ABS_patterns.reshape(self.K * self.K) # (K * K)
+        base_pred_ABS_pattern = pred_ABS_pattern.reshape(self.K * self.K) # (K * K)
 
         planning_ABS_patterns = np.zeros((planning_size, self.K*self.K), dtype=np.float32)
         if self.use_activation_oriented_policy_sample:
-            sorted_activation_idcs = np.argsort(-base_pred_ABS_patterns) # (K * K)
+            sorted_activation_idcs = np.argsort(-base_pred_ABS_pattern) # (K * K)
             top_o_sorted_activation_idcs = np.repeat(sorted_activation_idcs[:self.top_o_activations].reshape(1, self.top_o_activations), planning_size, axis=0) # (planning_size, top_o)
             # sample indices of planning_ABS_patterns indices
             sampled_idcs = set()
@@ -246,10 +249,12 @@ class SSERunner(object):
             sampled_idcs = np.array([list(item) for item in list(sampled_idcs)]).astype(np.int32) # (planning_size, n_ABS)
 
             selected_idcs = np.zeros_like(sampled_idcs)
-            for store, idc, tar in zip(selected_idcs, sampled_idcs, top_o_sorted_activation_idcs):
-                store = tar[idc]
+            idx = np.arange(planning_size)
+            for i, idc, tar in zip(idx, sampled_idcs, top_o_sorted_activation_idcs):
+                selected_idcs[i] = tar[idc]
             for pattern, idcs in zip(planning_ABS_patterns, selected_idcs):
                 pattern[idcs] = 1.
+            planning_ABS_patterns = planning_ABS_patterns.reshape(planning_size, self.K, self.K)
         else:
             raise NotImplementedError
         return planning_ABS_patterns
@@ -267,10 +272,10 @@ class SSERunner(object):
             top_k_pred_CGU_patterns: shape==(planning_size, K, K)
         )
         """
-        planning_size = GU_patterns.shape()[0]
+        planning_size = GU_patterns.shape[0]
         
         xs = np.stack(
-            (GU_patterns, planning_ABS_patterns), axis=1).to(self.device) # (planning_size, 2, K, K)
+            (GU_patterns, planning_ABS_patterns), axis=1) # (planning_size, 2, K, K)
         
         # feed in the emulator to get predicted CGU_patterns
         if planning_size < self.planning_batch_size: # predict directly
@@ -284,8 +289,9 @@ class SSERunner(object):
                 out = _t2n(self.emulator.model(torch.FloatTensor(item).to(self.device))).squeeze() # (batch_size, K, K)
                 ys_chunks.append(out)
             ys = np.concatenate(ys_chunks) # (planning_size, K, K)
+            assert ys.shape == (planning_size, self.K, self.K), f"{(planning_size, self.K, self.K)}"
         pred_CGU_patterns = ys.reshape(planning_size, self.K, self.K)
-        pred_CRs = np.sum(pred_CGU_patterns.reshape(planning_ABS_patterns, -1), axis=-1) # (planning_ABS_patterns)
+        pred_CRs = np.sum(pred_CGU_patterns.reshape(planning_size, -1), axis=-1) # (planning_size,)
         top_k_idcs = np.argsort(-pred_CRs, axis=-1)[:self.planning_top_k]
 
         top_k_GU_patterns  = GU_patterns[top_k_idcs]
@@ -299,7 +305,6 @@ class SSERunner(object):
         )
 
     def train(self):
-        self.trainer.prep_training()
         emulator_loss = self.emulator.train(self.emulator_buffer)
         policy_loss = self.policy.train(self.policy_buffer)
         return (
@@ -316,7 +321,7 @@ class SSERunner(object):
             wandb.log({'emulator_loss': emulator_loss}, episode)
             wandb.log({'policy_loss': policy_loss}, episode)
         else:
-            raise NotImplementedError
+            pass
 
     @torch.no_grad()
     def eval(self, curr_episode):
@@ -329,9 +334,9 @@ class SSERunner(object):
 
                 # planning
                 planning_size = self.num_planning_with_policy
-                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_patterns, planning_size) # (planning_size, K, K)
-                GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), 0, planning_size) # (planning_size, K, K)
-                assert planning_ABS_patterns.shape == (planning_size, self.K, self.K)
+                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size) # (planning_size, K, K)
+                GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), planning_size, axis=0) # (planning_size, K, K)
+                assert planning_ABS_patterns.shape == (planning_size, self.K, self.K), f"{planning_ABS_patterns.shape}"
                 assert GU_patterns.shape == (planning_size, self.K, self.K)
 
                 _, top_k_ABS_patterns, _ = self.plan(GU_patterns, planning_ABS_patterns)
