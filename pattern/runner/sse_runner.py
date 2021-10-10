@@ -122,10 +122,10 @@ class SSERunner(object):
             # plan with different strategies
             if episode < self.num_planning_random_warmup: # randomly sample different ABS patterns
                 planning_size = self.num_planning_random
-                planning_ABS_patterns = self.random_sample_ABS_patterns(planning_size) # (planning_size, K, K)
+                planning_size, planning_ABS_patterns = self.random_sample_ABS_patterns(planning_size) # (planning_size, K, K)
             else: # use policy μ to predict an ABS pattern, then sample near this patterns.
                 planning_size = self.num_planning_with_policy
-                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size)
+                planning_size, planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size)
             GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), planning_size, axis=0)
             assert planning_ABS_patterns.shape == (planning_size, self.K, self.K), f'{planning_ABS_patterns.shape}'
             assert GU_patterns.shape == (planning_size, self.K, self.K), f'{GU_patterns.shape}'
@@ -159,7 +159,7 @@ class SSERunner(object):
             # log information
             if episode % self.log_interval == 0:
                 end = time.time()
-                print(f"[whole process] episode {episode}/{episodes}, EPS {episode / (end - start)}")
+                print(f"[whole process ({'random' if episode < self.num_planning_random_warmup else 'policy'})] episode {episode}/{episodes}, EPS {episode / (end - start)}")
 
                 self.log_train(emulator_loss, policy_loss, episode)
 
@@ -182,7 +182,8 @@ class SSERunner(object):
 
         for _episode in range(episodes):
             GU_pattern = self.base_env.reset() # (K, K)
-            ABS_pattern = self.random_sample_ABS_patterns(1).reshape(self.K, self.K) # sample 1 pattern (K, K)
+            _, ABS_pattern = self.random_sample_ABS_patterns(1)
+            ABS_pattern = ABS_pattern.reshape(self.K, self.K) # sample 1 pattern (K, K)
             CGU_pattern = self.base_env.step(ABS_pattern) # (K, K)
             data = GU_pattern, ABS_pattern, None, CGU_pattern
             replay.add(data)
@@ -225,15 +226,23 @@ class SSERunner(object):
         """
         # generate `planning_size` unique pattern-indices lists
         planning_ABS_pattern_idcs = set()
+        counter = 0
         while len(planning_ABS_pattern_idcs) < planning_size:
+            counter += 1
             planning_ABS_pattern_idcs.add(tuple(generate_1_sequence(self.n_ABS, self.K * self.K)))
+            if counter >= planning_size * 2:
+                break
+        planning_size = len(planning_ABS_pattern_idcs)
         planning_ABS_pattern_idcs = np.array([list(item) for item in list(planning_ABS_pattern_idcs)]).astype(np.int32)
         # convert indices into patterns
         planning_ABS_patterns = np.zeros((planning_size, self.K * self.K), dtype=np.float32)
         for idc, p in zip(planning_ABS_pattern_idcs, planning_ABS_patterns):
             p[idc] = 1.
         planning_ABS_patterns = planning_ABS_patterns.reshape(planning_size, self.K, self.K)
-        return planning_ABS_patterns
+        return (
+            planning_size,
+            planning_ABS_patterns
+        )
 
     @torch.no_grad() # DEBUG
     def policy_sample_ABS_patterns(self, GU_pattern, planning_size):
@@ -253,8 +262,13 @@ class SSERunner(object):
             top_o_sorted_activation_idcs = np.repeat(sorted_activation_idcs[:self.top_o_activations].reshape(1, self.top_o_activations), planning_size, axis=0) # (planning_size, top_o)
             # sample indices of planning_ABS_patterns indices
             sampled_idcs = set()
+            counter = 0
             while len(sampled_idcs) < planning_size:
+                counter += 1
                 sampled_idcs.add(tuple(generate_1_sequence(self.n_ABS, self.top_o_activations)))
+                if counter >= planning_size*2:
+                    break
+            planning_size = len(sampled_idcs)
             sampled_idcs = np.array([list(item) for item in list(sampled_idcs)]).astype(np.int32) # (planning_size, n_ABS)
 
             selected_idcs = np.zeros_like(sampled_idcs)
@@ -266,7 +280,10 @@ class SSERunner(object):
             planning_ABS_patterns = planning_ABS_patterns.reshape(planning_size, self.K, self.K)
         else:
             raise NotImplementedError
-        return planning_ABS_patterns
+        return (
+            planning_size,
+            planning_ABS_patterns
+        )
 
 
     @torch.no_grad()
@@ -330,8 +347,10 @@ class SSERunner(object):
     def log_train(self, emulator_loss, policy_loss, episode):
         if self.use_wandb:
             print(f'[log] logging to wandb...')
-            wandb.log({'emulator_loss': emulator_loss}, episode)
-            wandb.log({'policy_loss': policy_loss}, episode)
+            if emulator_loss is not None:
+                wandb.log({'emulator_loss': emulator_loss}, episode)
+            if policy_loss is not None:
+                wandb.log({'policy_loss': policy_loss}, episode)
         else:
             pass
 
@@ -347,7 +366,7 @@ class SSERunner(object):
 
                 # planning
                 planning_size = self.num_planning_with_policy
-                planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size) # (planning_size, K, K)
+                planning_size, planning_ABS_patterns = self.policy_sample_ABS_patterns(GU_pattern, planning_size) # (planning_size, K, K)
                 GU_patterns = np.repeat(np.expand_dims(GU_pattern, 0), planning_size, axis=0) # (planning_size, K, K)
                 assert planning_ABS_patterns.shape == (planning_size, self.K, self.K), f"{planning_ABS_patterns.shape}"
                 assert GU_patterns.shape == (planning_size, self.K, self.K)
