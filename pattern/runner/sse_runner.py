@@ -223,7 +223,6 @@ class SSERunner(object):
         """
         :return: planning_ABS_patterns: shape==(planning_size, K, K)
         """
-        print(f'[sampling] random...')
         # generate `planning_size` unique pattern-indices lists
         planning_ABS_pattern_idcs = set()
         while len(planning_ABS_pattern_idcs) < planning_size:
@@ -243,7 +242,6 @@ class SSERunner(object):
         :param planning_size: planning size
         :return: planning_ABS_patterns: shape==(planning_size, K, K)
         """
-        print(f'[sampling] with policy...')
         GU_pattern = torch.FloatTensor(GU_pattern).to(self.device).view(1, 1, self.K, self.K) # (1, 1, K, K)
         pred_ABS_pattern = _t2n(self.policy.model(GU_pattern)) # (1, 1, K, K)
         # use base pattern to generate variations

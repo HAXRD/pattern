@@ -17,7 +17,6 @@ class NaivePolicy:
         self.least_policy_buffer_size = args.least_policy_buffer_size
         self.num_train_policy = args.num_train_policy
         self.policy_batch_size = args.policy_batch_size
-        
 
         self.device = device
         self.model = EncoderDecoder(1, 1).to(device)
@@ -37,7 +36,7 @@ class NaivePolicy:
             train_loss = None
             print(f'[policy train] not enough buffer {buffer.size} <= {self.least_policy_buffer_size}, skipping.')
         return train_loss
-    
+
     def update(self, data):
         return_loss = 0.
         GU_patterns, ABS_patterns = data

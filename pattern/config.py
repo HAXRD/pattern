@@ -71,13 +71,11 @@ def get_config():
                         help="batch_size for training base emulator.")
     parser.add_argument("--emulator_pt", type=str, default='./base_emulator.pt',
                         help="file name to env emulator φ0 ckpt")
-    parser.add_argument("--num_emulator_warmup", type=int, default=100,
-                        help="number of episodes to emulate to get φ_0") # TODO
     parser.add_argument("--emulator_replay_size", type=int, default=1000000,
                         help="replay size for emulator memory.") # TODO
     parser.add_argument("--emulator_lr", type=float, default=0.001,
                         help="lr for emulator.")
-    parser.add_argument("--policy_lr", type=float, default=0.0001, help="lr for policy")
+    parser.add_argument("--policy_lr", type=float, default=1e-6, help="lr for policy")
     parser.add_argument("--policy_replay_size", type=int, default=100000,
                         help="replay size for policy memory.") # TODO
     parser.add_argument("--num_planning_random_warmup", type=int, default=5000,
@@ -119,7 +117,7 @@ def get_config():
                         help="by default use activation oriented policy sample; otherwise not.")
     parser.add_argument("--use_eval", action="store_true", default=False,
                         help="by default False, will not use evaluation; otherwise with evaluation.")
-    parser.add_argument("--eval_episodes", type=int, default=10,
+    parser.add_argument("--eval_episodes", type=int, default=100,
                         help="number of episodes for evaluation.")
     return parser
     pass
