@@ -33,6 +33,9 @@ class NaivePolicy:
                 train_loss += loss
             total_size = self.num_train_policy * self.policy_batch_size
             train_loss /= total_size
+        else:
+            train_loss = None
+            print(f'[policy train] not enough buffer {buffer.size} <= {self.least_policy_buffer_size}, skipping.')
         return train_loss
     
     def update(self, data):

@@ -6,9 +6,10 @@ from envs.sse.core import World, ABS, GU, BM
 from envs.sse.scenario import BaseScenario
 
 class Scenario(BaseScenario):
-    def make_world(self, args, seed=0):
+    def make_world(self, args, is_base=False, seed=0):
         # instantiate world object with given BMs info
-        world = World(args.BMs_fname, seed)
+        path_to_load_BMs = args.base_BMs_fname if is_base else args.BMs_fname
+        world = World(path_to_load_BMs, seed)
         # set any world properties first
         world.n_ABS = args.n_ABS
         world.n_GU  = args.n_GU

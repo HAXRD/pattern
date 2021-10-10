@@ -14,37 +14,30 @@ from pathlib import Path
 from config import get_config
 from envs.sse.SSE_env import SSEEnv
 from runner.sse_runner import SSERunner as Runner
+from pprint import pprint
 
 def make_base_env(all_args):
     seed = all_args.seed
-    env = SSEEnv(all_args, seed)
+    env = SSEEnv(all_args, True, seed)
     env.seed(seed)
     return env
 
 def make_train_env(all_args):
     seed = all_args.seed * 10 + 1
-    env = SSEEnv(all_args, seed)
+    env = SSEEnv(all_args, False, seed)
     env.seed(seed)
     return env
 
 def make_eval_env(all_args):
     seed = all_args.seed * 100 + 13
-    env = SSEEnv(all_args, seed)
+    env = SSEEnv(all_args, False, seed)
     env.seed(seed)
     return env
 
-def parse_args(args, parser):
-    parser.add_argument('--scenario_name', type=str,
-                        help="Which scenario to run on")
-
-    all_args = parser.parse_known_args(args)[0]
-
-    return all_args
-
-
 def main(args):
     parser = get_config()
-    all_args = parse_args(args, parser)
+    all_args = parser.parse_known_args(args)[0]
+    pprint(all_args)
 
     # cuda
     torch.set_num_threads(1)

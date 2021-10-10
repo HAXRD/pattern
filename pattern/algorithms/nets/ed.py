@@ -1,6 +1,7 @@
 # Copyright (c) 2021, Xu Chen, FUNLab, Xiamen University
 # All rights reserved.
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -25,5 +26,5 @@ class EncoderDecoder(nn.Module):
         x = F.relu(self.conv2(x))
         x = self.pool(x)
         x = F.relu(self.t_conv1(x))
-        x = F.sigmoid(self.t_conv2(x))
+        x = torch.sigmoid(self.t_conv2(x))
         return x

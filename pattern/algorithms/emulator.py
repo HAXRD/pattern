@@ -21,6 +21,7 @@ class Emulator:
         self.least_emulator_buffer_size = args.least_emulator_buffer_size
         self.num_train_emulator = args.num_train_emulator
         self.emulator_batch_size = args.emulator_batch_size
+        self.emulator_replay_per = args.emulator_replay_per
 
         self.device = device
         self.model = EncoderDecoder(2, 1).to(device)
@@ -36,6 +37,9 @@ class Emulator:
                 train_loss += loss
             total_size = self.num_train_emulator * self.emulator_batch_size
             train_loss /= total_size
+        else:
+            train_loss = None
+            print(f'[emulator train] not enough buffer {buffer.size} <= {self.least_emulator_buffer_size}, skipping...')
         return train_loss
 
     def update(self, data):
@@ -53,7 +57,7 @@ class Emulator:
             self.optim.zero_grad()
             pred_CGU_patterns = self.model(torch.cat((GU_patterns, ABS_patterns), dim=1)).view(bz, -1)
 
-            loss = hybrid_mse(pred_CGU_patterns)
+            loss = hybrid_mse(pred_CGU_patterns, CGU_patterns)
             loss.backward()
             
             return_loss += loss.item() * bz

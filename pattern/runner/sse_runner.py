@@ -147,6 +147,10 @@ class SSERunner(object):
 
             # train the emulator and policy
             emulator_loss, policy_loss = self.train()
+            if emulator_loss is not None:
+                print(f'[emulator train] episode {episode}/{episodes}, emulator loss {emulator_loss}')
+            if policy_loss is not None:
+                print(f'[policy train] episode {episode}/{episodes}, policy loss {policy_loss}')
 
             # save model
             if (episode % self.save_interval == 0 or episode == episodes - 1):
@@ -155,7 +159,7 @@ class SSERunner(object):
             # log information
             if episode % self.log_interval == 0:
                 end = time.time()
-                print(f"\n {episode}/{episodes}, EPS {episode / (end - start)}")
+                print(f"[whole process] episode {episode}/{episodes}, EPS {episode / (end - start)}")
 
                 self.log_train(emulator_loss, policy_loss, episode)
 
@@ -168,6 +172,7 @@ class SSERunner(object):
         assert os.path.isfile(self.emulator_pt)
         emulator_state_dict = torch.load(self.emulator_pt)
         self.emulator.model.load_state_dict(emulator_state_dict)
+        print(f'[emulator load] loaded base emulator φ...')
 
     def emulator_pretrain(self):
         print('[emulator pretrain] starting...')
@@ -175,16 +180,18 @@ class SSERunner(object):
         replay = EmulatorNaiveReplay(self.K, self.num_base_env_episodes)
         episodes = int(self.num_base_env_episodes)
 
-        for _ in range(episodes):
+        for _episode in range(episodes):
             GU_pattern = self.base_env.reset() # (K, K)
             ABS_pattern = self.random_sample_ABS_patterns(1).reshape(self.K, self.K) # sample 1 pattern (K, K)
             CGU_pattern = self.base_env.step(ABS_pattern) # (K, K)
             data = GU_pattern, ABS_pattern, None, CGU_pattern
             replay.add(data)
+            print(f'[emulator pretrain: collecting] collected memory {replay.size}/{replay.max_size}, progress {_episode + 1}/{episodes}')
 
         optimizer = torch.optim.Adam(self.emulator.model.parameters(), lr=0.001)
         min_train_loss = math.inf
-        for epoch in range(self.num_base_emulator_epochs):
+        epochs = self.num_base_emulator_epochs
+        for epoch in range(epochs):
             train_loss = 0.
             replay.shuffle()
             for data in replay.data_loader(self.num_base_emulator_batch_size):
@@ -205,15 +212,18 @@ class SSERunner(object):
                 optimizer.step()
                 train_loss += loss.item() * bz
             train_loss = train_loss / replay.size
-            print(f'Epoch {epoch + 1} \t loss: {train_loss:.6f}')
+            print(f'[emulator pretrain: training] progress {epoch + 1}/{epochs} \t loss: {train_loss:.6f}')
             if train_loss < min_train_loss:
+                min_train_loss = train_loss
                 torch.save(self.emulator.model.state_dict(), 'base_emulator.pt')
-        print(f'Pretrain base emulator done...')
+                print(f'[emulator pretrain: training] updated best_emulator.pt file')
+        print(f'[emulator pretrain] done...')
 
     def random_sample_ABS_patterns(self, planning_size):
         """
         :return: planning_ABS_patterns: shape==(planning_size, K, K)
         """
+        print(f'[sampling] random...')
         # generate `planning_size` unique pattern-indices lists
         planning_ABS_pattern_idcs = set()
         while len(planning_ABS_pattern_idcs) < planning_size:
@@ -233,6 +243,7 @@ class SSERunner(object):
         :param planning_size: planning size
         :return: planning_ABS_patterns: shape==(planning_size, K, K)
         """
+        print(f'[sampling] with policy...')
         GU_pattern = torch.FloatTensor(GU_pattern).to(self.device).view(1, 1, self.K, self.K) # (1, 1, K, K)
         pred_ABS_pattern = _t2n(self.policy.model(GU_pattern)) # (1, 1, K, K)
         # use base pattern to generate variations
@@ -282,7 +293,7 @@ class SSERunner(object):
             ys = _t2n(self.emulator.model(torch.FloatTensor(xs).to(self.device))).squeeze() # (planning_size, K, K)
         else: # partition into chunks
             batch_size = self.planning_batch_size
-            n_chunks = math.ceil(float(planning_size)/float(batch_size))
+            # n_chunks = math.ceil(float(planning_size)/float(batch_size))
             xs_chunks = [xs[i: i+batch_size] for i in range(0, len(xs), batch_size)]
             ys_chunks = [] # predicted CGU_patterns in chunk
             for item in xs_chunks:
@@ -315,9 +326,12 @@ class SSERunner(object):
     def save(self):
         torch.save(self.emulator.model.state_dict(), 'emulator.pt')
         torch.save(self.policy.model.state_dict(), 'policy.pt')
+        print(f'[save] saved emulator & policy pts...')
+
 
     def log_train(self, emulator_loss, policy_loss, episode):
         if self.use_wandb:
+            print(f'[log] logging to wandb...')
             wandb.log({'emulator_loss': emulator_loss}, episode)
             wandb.log({'policy_loss': policy_loss}, episode)
         else:
@@ -325,9 +339,10 @@ class SSERunner(object):
 
     @torch.no_grad()
     def eval(self, curr_episode):
-        
+        print(f'[eval] starting eval...')
         with temp_seed(self.seed+100000):
             best_CRs = []
+            episodes = self.eval_episodes
             for episode in range(self.eval_episodes):
                 # reset all env
                 GU_pattern = self.eval_env.reset() # (K, K)
@@ -341,15 +356,21 @@ class SSERunner(object):
 
                 _, top_k_ABS_patterns, _ = self.plan(GU_patterns, planning_ABS_patterns)
                 top_k_CGU_patterns = np.zeros_like(top_k_ABS_patterns) # (planning_size, K, K)
-                for _CGU_pattern, _ABS_pattern in zip(top_k_CGU_patterns, top_k_ABS_patterns):
-                    _CGU_pattern = self.env.step(_ABS_pattern)
+                for idx, _ABS_pattern in enumerate(top_k_ABS_patterns):
+                    _CGU_pattern = self.eval_env.step(_ABS_pattern)
+                    top_k_CGU_patterns[idx] = _CGU_pattern
 
                 top_k_CRs = np.sum(top_k_CGU_patterns.reshape(planning_size, -1), axis=-1) # (planning_size)
                 sorted_idcs = np.argsort(-top_k_CRs)
                 top_CR = top_k_CRs[sorted_idcs][0]
 
                 best_CRs.append(top_CR)
+                print(f'[eval] progress {episode + 1}/{episodes}')
 
+            print(f'==============================')
+            print(f'[eval] first 15 episode CRs: {best_CRs[:15]}')
+            print(f'[eval] mean CRs: {np.mean(best_CRs)}')
+            print(f'==============================')
             if self.use_wandb:
                 wandb.log({'eval_CRs': best_CRs}, curr_episode)
                 wandb.log({'mean_eval_CRs': np.mean(best_CRs)}, curr_episode)
