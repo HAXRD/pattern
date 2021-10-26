@@ -82,15 +82,17 @@ class SSERunner(object):
 
         # TODO: env emulator φ
         # ...
-        from algorithms.emulator import Emulator
+        # from algorithms.emulator import Emulator
+        from algorithms2.emulator import Emulator
         self.emulator = Emulator(self.all_args, self.device)
 
         # TODO: policy μ
         # ...
-        if self.policy_distributional == True:
-            from algorithms.policy import DistributionalPolicy as Policy
-        else:
-            from algorithms.policy import NaivePolicy as Policy
+        # if self.policy_distributional == True:
+        #     from algorithms.policy import DistributionalPolicy as Policy
+        # else:
+        #     from algorithms.policy import NaivePolicy as Policy
+        from algorithms2.policy import Policy
         self.policy = Policy(self.all_args, self.device)
 
         # TODO: transitions for φ
