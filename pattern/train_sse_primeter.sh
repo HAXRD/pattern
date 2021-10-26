@@ -2,8 +2,8 @@
 
 exp="0-BMs-normal"
 seed_max=1
-bm="/home/lyus/Desktop/haxrd/1003/pattern/pattern/terrain-0.mat"
-base_bm="/home/lyus/Desktop/haxrd/1003/pattern/pattern/terrain-0.mat"
+bm="/home/haxrd/Desktop/1010/pattern/pattern/terrain-0.mat"
+base_bm="/home/haxrd/Desktop/1010/pattern/pattern/terrain-0.mat"
 world_len=1000.
 granularity=31.25
 n_ABS=10

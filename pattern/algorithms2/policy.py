@@ -13,13 +13,14 @@ class Policy:
     """
     def __init__(self, args, device=torch.device("cpu")):
         self.args = args
+        self.policy_lr = args.policy_lr
         self.least_policy_buffer_size = args.least_policy_buffer_size
         self.num_train_policy = args.num_train_policy
         self.policy_batch_size = args.policy_batch_size
 
         self.device = device
         self.model = CVAE('policy', 1, 1, 64, 64).to(device)
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.lr) # TODO: might need to add scheduler to adjust initial data-non-sufficient problem.
+        self.optim = torch.optim.Adam(self.model.parameters(), lr=self.policy_lr) # TODO: might need to add scheduler to adjust initial data-non-sufficient problem.
 
     def train(self, buffer):
         kld_weight = self.policy_batch_size / buffer.max_size
