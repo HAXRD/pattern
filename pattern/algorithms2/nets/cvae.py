@@ -197,12 +197,14 @@ class CVAE(BaseVAE):
             P_GU, P_ABS, P_CGU, y_hat_raw, mu, log_var = args
             mask = P_GU.gt(0.)
             y_hat = y_hat_raw * mask # filtered y_hat
+            y = P_CGU
         elif self.name == 'policy': # policy
             P_GU, P_ABS, y_hat_raw, mu, log_var = args
             y_hat = y_hat_raw
+            y = P_ABS
 
         # recons loss
-        recons_loss = F.mse_loss(y_hat, P_CGU)
+        recons_loss = F.mse_loss(y_hat, y)
 
         # KL divergence loss
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
