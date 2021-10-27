@@ -13,7 +13,7 @@ from pathlib import Path
 
 from config import get_config
 from envs.sse.SSE_env import SSEEnv
-from runner.sse_runner import SSERunner as Runner
+from runner.sse_runner2 import SSERunner as Runner
 from pprint import pprint
 
 def make_base_env(all_args):

@@ -33,7 +33,7 @@ def get_config():
                         help="file name of BMs mat file.") # TODO
     parser.add_argument("--world_len", type=float, default=1000.,
                         help="side length of the square shape world.") # TODO
-    parser.add_argument("--granularity", type=float, default=25.,
+    parser.add_argument("--granularity", type=float, default=31.25,
                         help="pattern size.") # TODO
     parser.add_argument("--episode_length", type=float, default=40.,
                         help="duration of 1 episode.")

@@ -20,7 +20,7 @@ class Emulator:
         self.emulator_replay_per = args.emulator_replay_per
 
         self.device = device
-        self.model = CVAE('emulator', 2, 1, 64, 64).to(device)
+        self.model = CVAE('emulator', 64, 64).to(device)
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.lr) # TODO: might need to add scheduler to adjust initial data-non-sufficient problem.
 
     def train(self, buffer):

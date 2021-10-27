@@ -19,14 +19,17 @@ class CVAE(BaseVAE):
     """
     def __init__(self,
                  name,
-                 x_in_channels,
-                 y_in_channels,
                  embedder_latent_dim,
                  encoder_latent_dim,
                  hidden_dims=None):
         super(CVAE, self).__init__()
 
         assert name in ['emulator', 'policy']
+        if name == 'emulator':
+            x_in_channels = 2
+        elif name == 'policy':
+            x_in_channels = 1
+        y_in_channels = 1
         self.name = name
         self.embedder_latent_dim = embedder_latent_dim
         self.encoder_latent_dim  = encoder_latent_dim
@@ -159,22 +162,32 @@ class CVAE(BaseVAE):
         """
         if self.name == 'emulator': # emulator
             P_GU, P_ABS, P_CGU = args
+
+            # embedding
+            embedded_latent = self.embed(P_GU, P_ABS)
+
+            # encoding
+            mu, log_var = self.encode(P_GU, P_ABS, P_CGU)
+            encoded_latent = self.reparameterize(mu, log_var)
+
+            # decoding
+            y_hat_raw = self.decode(embedded_latent, encoded_latent)
+
+            return [P_GU, P_ABS, P_CGU, y_hat_raw, mu, log_var]
+
         elif self.name == 'policy': # policy
             P_GU, P_ABS = args
 
-        # embedding
-        embedded_latent = self.embed(P_GU, P_ABS)
+            # embedding
+            embedded_latent = self.embed(P_GU)
 
-        # encoding
-        mu, log_var = self.encode(P_GU, P_ABS, P_CGU)
-        encoded_latent = self.reparameterize(mu, log_var)
+            # encoding
+            mu, log_var = self.encode(P_GU, P_ABS)
+            encoded_latent = self.reparameterize(mu, log_var)
 
-        # decoding
-        y_hat_raw = self.decode(embedded_latent, encoded_latent)
-        
-        if self.name == 'emulator':
-            return [P_GU, P_ABS, P_CGU, y_hat_raw, mu, log_var]
-        elif self.name == 'policy':
+            # decoding
+            y_hat_raw = self.decode(embedded_latent, encoded_latent)
+
             return [P_GU, P_ABS, y_hat_raw, mu, log_var]
 
     def loss_function(self, *args, **kwargs):
@@ -204,7 +217,7 @@ class CVAE(BaseVAE):
             'kld_loss': -kld_loss
         }
 
-    def predict(self, *args):
+    def predict(self, *args, device=torch.device('cpu')):
         """
         Provided conditional input x, along with noise from Normal distribution,
         to predict output y_hat.
@@ -218,10 +231,10 @@ class CVAE(BaseVAE):
         batch_size = P_GU.size()[0]
 
         # embedded latent
-        embedded_latent = self.embed(args)
+        embedded_latent = self.embed(*args)
 
         # Gaussian noise latent
-        noisy_latent = torch.randn(batch_size, self.encoder_latent_dim)
+        noisy_latent = torch.randn(batch_size, self.encoder_latent_dim).to(device)
 
         y_hat_raw = self.decode(embedded_latent, noisy_latent)
         if self.name == 'emulator':

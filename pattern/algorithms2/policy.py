@@ -19,7 +19,7 @@ class Policy:
         self.policy_batch_size = args.policy_batch_size
 
         self.device = device
-        self.model = CVAE('policy', 1, 1, 64, 64).to(device)
+        self.model = CVAE('policy', 64, 64).to(device)
         self.optim = torch.optim.Adam(self.model.parameters(), lr=self.policy_lr) # TODO: might need to add scheduler to adjust initial data-non-sufficient problem.
 
     def train(self, buffer):
