@@ -50,7 +50,7 @@ class Emulator:
             batch_size = batch_P_GU.size()[0]
             
             rtns = self.model(batch_P_GU, batch_P_ABS, batch_P_CGU)
-            loss_dict = self.model.loss_function(rtns, kld_weight)
+            loss_dict = self.model.loss_function(*rtns, kld_weight=kld_weight)
             loss = loss_dict['loss']
             self.optim.zero_grad()
             loss.backward()

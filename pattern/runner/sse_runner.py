@@ -191,30 +191,12 @@ class SSERunner(object):
             replay.add(data)
             print(f'[emulator pretrain: collecting] collected memory {replay.size}/{replay.max_size}, progress {_episode + 1}/{episodes}')
 
-        optimizer = torch.optim.Adam(self.emulator.model.parameters(), lr=0.001)
         min_train_loss = math.inf
         epochs = self.num_base_emulator_epochs
         for epoch in range(epochs):
             train_loss = 0.
             replay.shuffle()
-            for data in replay.data_loader(self.num_base_emulator_batch_size):
-                batch_GU_pattern, batch_ABS_pattern, batch_CGU_pattern = data
-                batch_GU_pattern = batch_GU_pattern.to(self.device)
-                batch_ABS_pattern = batch_ABS_pattern.to(self.device)
-                batch_CGU_pattern = batch_CGU_pattern.to(self.device)
-                bz = batch_GU_pattern.size()[0]
-
-                optimizer.zero_grad()
-                batch_output_pattern = self.emulator.model(torch.cat((batch_GU_pattern, batch_ABS_pattern), dim=1)).squeeze()
-
-                batch_CGU_pattern = batch_CGU_pattern.view(bz, -1)
-                batch_output_pattern = batch_output_pattern.view(bz, -1)
-                loss = hybrid_mse(batch_output_pattern, batch_CGU_pattern)
-
-                loss.backward()
-                optimizer.step()
-                train_loss += loss.item() * bz
-            train_loss = train_loss / replay.size
+            train_loss = self.emulator.train(replay)
             print(f'[emulator pretrain: training] progress {epoch + 1}/{epochs} \t loss: {train_loss:.6f}')
             if train_loss < min_train_loss:
                 min_train_loss = train_loss

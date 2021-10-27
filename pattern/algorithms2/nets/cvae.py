@@ -158,9 +158,9 @@ class CVAE(BaseVAE):
         :param P_ABS: [N x 1 x H x W]
         """
         if self.name == 'emulator': # emulator
-            P_GU, P_ABS = args
-        elif self.name == 'policy': # policy
             P_GU, P_ABS, P_CGU = args
+        elif self.name == 'policy': # policy
+            P_GU, P_ABS = args
 
         # embedding
         embedded_latent = self.embed(P_GU, P_ABS)
@@ -172,7 +172,10 @@ class CVAE(BaseVAE):
         # decoding
         y_hat_raw = self.decode(embedded_latent, encoded_latent)
         
-        return args + [y_hat_raw, mu, log_var]
+        if self.name == 'emulator':
+            return [P_GU, P_ABS, P_CGU, y_hat_raw, mu, log_var]
+        elif self.name == 'policy':
+            return [P_GU, P_ABS, y_hat_raw, mu, log_var]
 
     def loss_function(self, *args, **kwargs):
         """
